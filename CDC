@@ -1,0 +1,1240 @@
+import json
+import time
+import pandas as pd
+import requests
+import os
+import scipy.stats as stats
+
+# 1. Configuration Constants
+CDC_DOMAIN = "data.cdc.gov"
+DATASET_ID = "hfr9-rurv"  # Alzheimer's and Healthy Aging Data ID
+BASE_URL = f"https://{CDC_DOMAIN}/resource/{DATASET_ID}.json"
+
+# Setting a real User-Agent stops the CDC firewall from blocking your Python script
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Accept": "application/json",
+}
+
+
+def fetch_all_cdc_data(base_url, headers, rows_per_page=5000):
+    """Loops through Socrata API pagination to get ALL rows of a dataset safely."""
+    all_records = []
+    offset = 0
+
+    print(f"[*] Initializing connection to {CDC_DOMAIN}...")
+
+    while True:
+        # Construct SoQL paging query string
+        # Socrata relies on URL parameters $limit and $offset for data chunking
+        url = f"{base_url}?$limit={rows_per_page}&$offset={offset}"
+        print(f"[*] Requesting rows {offset} to {offset + rows_per_page}...")
+
+        try:
+            # Make the HTTP GET request
+            response = requests.get(url, headers=headers, timeout=30)
+
+            # Check if connection was successful (HTTP 200)
+            if response.status_code != 200:
+                print(f"[!] Server returned an error code: {response.status_code}")
+                print(f"[!] Error details: {response.text}")
+                break
+
+            # Parse JSON text payload
+            data_chunk = response.json()
+
+            # Break out of loop if the server returns no more rows
+            if not data_chunk:
+                print("[+] Reached the end of the dataset.")
+                break
+
+            all_records.extend(data_chunk)
+            offset += rows_per_page
+
+            # Polite delay to respect CDC server loads
+            time.sleep(0.5)
+
+        except requests.exceptions.ConnectionError as ce:
+            print(f"[!] Network Connection error. Verify internet or DNS: {ce}")
+            break
+        except requests.exceptions.Timeout:
+            print("[!] Request timed out. Server might be under heavy load.")
+            break
+        except json.JSONDecodeError:
+            print("[!] Failed to parse server response as JSON object.")
+            break
+
+    return all_records
+
+
+if __name__ == "__main__":
+
+    import os
+
+    FILE_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cdc_alzheimers_data.csv")
+
+    # Check if we already downloaded the dataset
+    if os.path.exists(FILE_NAME):
+        print("[+] Existing CDC dataset found!")
+        print("[+] Loading data from local CSV...")
+        
+        df = pd.read_csv(FILE_NAME)
+
+        print("\n[SUCCESS] Dataset loaded from local file.")
+        print(f"Total Rows: {df.shape[0]}")
+        print(f"Total Columns: {df.shape[1]}")
+
+    else:
+        # Download dataset only if it doesn't already exist
+        print("[*] Local dataset not found.")
+        print("[*] Downloading CDC dataset...")
+
+        raw_data = fetch_all_cdc_data(BASE_URL, HEADERS)
+
+        if raw_data:
+            print("\n[*] Converting JSON data into DataFrame...")
+            df = pd.DataFrame(raw_data)
+
+            print("-" * 50)
+            print("[SUCCESS] Successfully built DataFrame.")
+            print(f"Total Rows Extracted: {df.shape[0]}")
+            print(f"Total Columns Discovered: {df.shape[1]}")
+            print("-" * 50)
+
+            # Save locally
+            df.to_csv(FILE_NAME, index=False)
+
+            print(f"\n[+] Dataset saved as '{FILE_NAME}'")
+
+        else:
+            print("\n[!] No data was collected.")
+            exit()
+
+    # Show a sample
+    print("\nFirst 10 rows:")
+    print(df.head(10))
+
+    print("\nColumn names:")
+    print(df.columns.tolist())
+
+print("\n" + "=" * 60)
+print("CDC DATASET STRUCTURE")
+print("=" * 60)
+
+print("\nShape:")
+print(df.shape)
+
+print("\nColumn Names:")
+for i, col in enumerate(df.columns):
+    print(f"{i}: {col}")
+
+print("\nData Types:")
+print(df.dtypes)
+
+print("\nMissing Values:")
+print(df.isnull().sum())
+
+print("\nUnique Values:")
+for col in df.columns:
+    print(f"\n===== {col} =====")
+    print("Unique values:", df[col].nunique())
+    print(df[col].dropna().unique()[:20])
+
+print("\nDescriptive Statistics:")
+print(df.describe(include="all").T)
+
+print("\n" + "=" * 60)
+print("COGNITIVE DECLINE DATA")
+print("=" * 60)
+
+cognitive_df = df[df["class"] == "Cognitive Decline"].copy()
+
+print(f"\nRows in Cognitive Decline class: {len(cognitive_df)}")
+
+print("\nTopics:")
+print(cognitive_df["topic"].value_counts())
+
+print("\nQuestions:")
+print(cognitive_df["question"].value_counts())
+
+print("\nYears:")
+print(cognitive_df["yearstart"].value_counts().sort_index())
+
+print("\nAge groups:")
+print(cognitive_df["stratification1"].value_counts())
+
+print("\nStratification categories:")
+print(cognitive_df["stratificationcategory2"].value_counts(dropna=False))
+
+print("\nStratification values:")
+print(cognitive_df["stratification2"].value_counts(dropna=False))
+
+''''
+cognitive = df[
+    df["topic"] == "Subjective cognitive decline or memory loss among older adults"
+].copy()
+
+cognitive = cognitive.dropna(subset=["data_value"])
+
+print("Shape:", cognitive.shape)
+
+print("\nStratification combinations:")
+print(
+    cognitive[
+        ["stratification1", "stratificationcategory2", "stratification2"]
+    ].drop_duplicates().to_string(index=False)
+)
+
+print("\nYears:")
+print(cognitive["yearstart"].value_counts().sort_index())
+
+print("\nLocations:", cognitive["locationdesc"].nunique())
+
+print("\nSample:")
+print(
+    cognitive[
+        [
+            "yearstart",
+            "locationdesc",
+            "stratification1",
+            "stratificationcategory2",
+            "stratification2",
+            "data_value"
+        ]
+    ].head(20).to_string(index=False)
+)
+cognitive_data = df[df["class"] == "Cognitive Decline"].copy()
+
+print("Cognitive Decline rows:", len(cognitive_data))
+print(cognitive_data.head())
+
+print(cognitive_data["question"].value_counts())
+sdc = cognitive_data[
+    cognitive_data["topic"] == 
+    "Subjective cognitive decline or memory loss among older adults"
+].copy()
+
+print("Rows:", len(sdc))
+print(sdc.head())
+print(sdc[[
+    "yearstart",
+    "locationdesc",
+    "stratification1",
+    "stratification2",
+    "data_value"
+]].head(20))
+
+columns_to_keep = [
+    "yearstart",
+    "locationdesc",
+    "stratification1",
+    "stratification2",
+    "data_value",
+    "low_confidence_limit",
+    "high_confidence_limit",
+    "data_value_footnote"
+]
+
+sdc = sdc[columns_to_keep].copy()
+
+print("\nMissing Value Report:")
+missing_report = pd.DataFrame({
+    "Missing Count": df.isnull().sum(),
+    "Missing Percentage": (df.isnull().mean() * 100).round(2)
+})
+
+print(missing_report.to_string())
+
+for col in df.columns:
+    print(f"\n===== {col} =====")
+    print("Unique values:", df[col].nunique())
+    print(df[col].dropna().unique()[:20])
+
+variable_summary = pd.DataFrame({
+    "Data Type": df.dtypes.astype(str),
+    "Unique Values": df.nunique(),
+    "Missing Count": df.isnull().sum(),
+    "Missing Percentage": (df.isnull().mean() * 100).round(2)
+})
+
+print("\nVariable Summary:")
+print(variable_summary.to_string())
+
+df.describe(include="all").T
+
+print("\nNumerical Descriptive Statistics:")
+print(df.describe().T)
+
+categorical_columns = df.select_dtypes(include="object").columns
+
+categorical_summary = pd.DataFrame({
+    "Unique Values": df[categorical_columns].nunique(),
+    "Missing Count": df[categorical_columns].isnull().sum(),
+    "Missing Percentage": (df[categorical_columns].isnull().mean() * 100).round(2)
+})
+
+print("\nCategorical Variable Summary:")
+print(categorical_summary.to_string())
+
+sdc = cognitive_data[
+    cognitive_data["topic"] == 
+    "Subjective cognitive decline or memory loss among older adults"
+].copy()
+
+print("\nSCD data types:")
+print(sdc.dtypes)
+
+print("\nSCD missing values:")
+print(
+    pd.DataFrame({
+        "Missing Count": sdc.isnull().sum(),
+        "Missing Percentage": (sdc.isnull().mean() * 100).round(2)
+    }).to_string()
+)
+
+print("\nSCD descriptive statistics:")
+print(sdc.describe(include="all").T)
+
+print("\nSCD value type:")
+print(sdc["data_value_type"].value_counts(dropna=False))
+
+print("\nSCD units:")
+print(sdc["data_value_unit"].value_counts(dropna=False))
+
+print("\nSCD years:")
+print(sdc["yearstart"].value_counts().sort_index())
+
+print("\nSCD locations:")
+print(sdc["locationdesc"].nunique())
+
+print("\nSCD age groups:")
+print(sdc["stratification1"].value_counts(dropna=False))
+
+print("\nSCD sex/race breakdown:")
+print(sdc["stratificationcategory2"].value_counts(dropna=False))
+
+print("\nSCD stratification values:")
+print(sdc["stratification2"].value_counts(dropna=False))
+
+variable_summary = pd.DataFrame({
+    "Data Type": df.dtypes.astype(str),
+    "Unique Values": df.nunique(),
+    "Missing Count": df.isna().sum(),
+    "Missing Percentage": (df.isna().mean() * 100).round(2)
+})
+
+print(variable_summary)
+
+print(variable_summary.to_string())
+
+total_cells = df.shape[0] * df.shape[1]
+missing_cells = df.isna().sum().sum()
+
+overall_missing_percentage = (missing_cells / total_cells) * 100
+
+print("Total cells:", total_cells)
+print("Missing cells:", missing_cells)
+print("Overall missing percentage:", round(overall_missing_percentage, 2), "%")
+
+# Look at rows where data_value is missing
+missing_data = df[df["data_value"].isna()]
+
+# Examine the footnotes associated with missing data_value
+print(
+    missing_data["data_value_footnote"]
+    .value_counts(dropna=False)
+)
+
+print(
+    missing_data["data_value_footnote_symbol"]
+    .value_counts(dropna=False)
+)
+
+print(
+    missing_data["yearstart"]
+    .value_counts()
+    .sort_index()
+)
+
+df.describe()
+
+df[['data_value', 'data_value_alt',
+    'low_confidence_limit',
+    'high_confidence_limit']].describe()
+
+stats = df['data_value'].describe()
+
+print("Mean:", df['data_value'].mean())
+print("Median:", df['data_value'].median())
+print("Standard Deviation:", df['data_value'].std())
+print("Minimum:", df['data_value'].min())
+print("Maximum:", df['data_value'].max())
+
+df['data_value_type'].value_counts()
+df['data_value_unit'].value_counts()
+df['topic'].value_counts()
+df['question'].value_counts()
+
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10, 6))
+
+df['data_value'].dropna().hist(bins=30)
+
+plt.xlabel('Data Value')
+plt.ylabel('Frequency')
+plt.title('Distribution of CDC Data Values')
+plt.show()
+
+year_means = df.groupby('yearstart')['data_value'].mean()
+
+print(year_means)
+
+plt.figure(figsize=(10, 6))
+
+year_means.plot(marker='o')
+
+plt.xlabel('Year')
+plt.ylabel('Mean Data Value')
+plt.title('Mean CDC Data Value by Year')
+plt.show()
+
+age_means = df.groupby('stratification1')['data_value'].agg(
+    ['count', 'mean', 'median', 'std']
+)
+
+print(age_means)
+
+plt.figure(figsize=(8, 6))
+
+age_means['mean'].plot(kind='bar')
+
+plt.xlabel('Age Group')
+plt.ylabel('Mean Data Value')
+plt.title('Mean Data Value by Age Group')
+plt.xticks(rotation=0)
+plt.show()
+
+print(df['data_value_unit'].value_counts(dropna=False))
+print(df['data_value_type'].value_counts(dropna=False))
+print(df[['topic', 'question', 'data_value_unit', 'data_value_type']].head(20).to_string(index=False))
+print(df[['topic', 'question']].drop_duplicates().to_string(index=False))
+
+percentage_df = df[df['data_value_type'] == 'Percentage']
+
+mean_df = df[df['data_value_type'] == 'Mean']
+
+percentage_df = df[df['data_value_type'] == 'Percentage']
+
+print("Percentage measures:")
+print("Mean:", percentage_df['data_value'].mean())
+print("Median:", percentage_df['data_value'].median())
+print("Standard Deviation:", percentage_df['data_value'].std())
+print("Minimum:", percentage_df['data_value'].min())
+print("Maximum:", percentage_df['data_value'].max())
+
+mean_df = df[df['data_value_type'] == 'Mean']
+
+print("Mean-based measures:")
+print("Mean:", mean_df['data_value'].mean())
+print("Median:", mean_df['data_value'].median())
+print("Standard Deviation:", mean_df['data_value'].std())
+print("Minimum:", mean_df['data_value'].min())
+print("Maximum:", mean_df['data_value'].max())
+
+descriptive_stats = (
+    percentage_df.groupby('topic')['data_value']
+    .agg(['count', 'mean', 'median', 'std', 'min', 'max'])
+    .round(2)
+)
+
+print(descriptive_stats)
+
+group_50_64 = cognitive_df[
+    cognitive_df["stratification1"] == "50-64 years"
+]["data_value"].dropna()
+
+group_65_plus = cognitive_df[
+    cognitive_df["stratification1"] == "65 years or older"
+]["data_value"].dropna()
+
+print("50-64 observations:", len(group_50_64))
+print("65+ observations:", len(group_65_plus))
+
+from scipy.stats import ttest_ind
+
+t_stat, p_value = ttest_ind(
+    group_50_64,
+    group_65_plus,
+    equal_var=False
+)
+
+print("t-statistic:", t_stat)
+print("p-value:", p_value)
+
+df_scd = df[
+    (df["topic"] == "Subjective cognitive decline or memory loss among older adults") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"]))
+].copy()
+
+print(df_scd.shape)
+print(df_scd["stratification1"].value_counts())
+
+print(df_scd.groupby("stratification1")["data_value"].agg(
+    ["count", "mean", "median", "std", "min", "max"]
+))
+
+df_scd = df[
+    (df["topic"] == "Subjective cognitive decline or memory loss among older adults") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"])) &
+    (df["data_value"].notna())
+]
+
+import matplotlib.pyplot as plt
+
+# Create the box plot
+plt.figure(figsize=(8, 6))
+
+df_scd.boxplot(
+    column="data_value",
+    by="stratification1"
+)
+
+plt.title("Subjective Cognitive Decline or Memory Loss by Age Group")
+plt.suptitle("")
+plt.xlabel("Age Group")
+plt.ylabel("Prevalence (%)")
+plt.grid(axis="y", alpha=0.3)
+
+plt.show()
+
+df_functional = df[
+    (df["topic"] == "Functional difficulties associated with subjective cognitive decline or memory loss among older adults") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"])) &
+    (df["data_value"].notna())
+]
+
+print(df_functional.shape)
+print(df_functional["stratification1"].value_counts())
+'''
+
+df_bp = df[
+    (df["topic"] == "High blood pressure ever") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"])) &
+    (df["data_value"].notna())
+]
+
+print(df_bp.shape)
+print(df_bp["stratification1"].value_counts())
+
+# Filter to the SCD feature and the two age groups
+scd = df[
+    (df["topic"] == "Subjective cognitive decline or memory loss among older adults") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"]))
+].copy()
+
+# Remove rows where the outcome is missing
+scd = scd.dropna(subset=["data_value"])
+
+# Basic information
+print("Shape:", scd.shape)
+print("\nObservations by age group:")
+print(scd["stratification1"].value_counts())
+
+print("\nDescriptive statistics:")
+print(scd.groupby("stratification1")["data_value"].describe())
+
+# Calculate IQR outlier boundaries for each age group
+
+for group in ["50-64 years", "65 years or older"]:
+    values = scd.loc[scd["stratification1"] == group, "data_value"]
+
+    Q1 = values.quantile(0.25)
+    Q3 = values.quantile(0.75)
+    IQR = Q3 - Q1
+
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    print("\n", group)
+    print("Q1:", Q1)
+    print("Q3:", Q3)
+    print("IQR:", IQR)
+    print("Lower bound:", lower_bound)
+    print("Upper bound:", upper_bound)
+
+# Count IQR outliers in each age group
+
+for group in ["50-64 years", "65 years or older"]:
+    values = scd.loc[scd["stratification1"] == group, "data_value"]
+
+    Q1 = values.quantile(0.25)
+    Q3 = values.quantile(0.75)
+    IQR = Q3 - Q1
+
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    outliers = values[(values < lower_bound) | (values > upper_bound)]
+
+    print("\n", group)
+    print("Total observations:", len(values))
+    print("Number of outliers:", len(outliers))
+    print("Percentage of observations that are outliers:", 
+          len(outliers) / len(values) * 100)
+
+# Compare median and mean before and after removing IQR outliers
+
+for group in ["50-64 years", "65 years or older"]:
+    values = scd.loc[
+        scd["stratification1"] == group, "data_value"
+    ].dropna()
+
+    Q1 = values.quantile(0.25)
+    Q3 = values.quantile(0.75)
+    IQR = Q3 - Q1
+
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    # Remove IQR-defined outliers
+    values_no_outliers = values[
+        (values >= lower_bound) & (values <= upper_bound)
+    ]
+
+    print("\n", group)
+
+    print("BEFORE removing outliers:")
+    print("Mean:", values.mean())
+    print("Median:", values.median())
+
+    print("AFTER removing outliers:")
+    print("Mean:", values_no_outliers.mean())
+    print("Median:", values_no_outliers.median())
+
+# Show the highest SCD estimates in each age group
+
+for group in ["50-64 years", "65 years or older"]:
+    print("\n==============================")
+    print(group)
+    print("==============================")
+
+    group_data = scd[
+        scd["stratification1"] == group
+    ].sort_values("data_value", ascending=False)
+
+    print(
+        group_data[
+            ["yearstart", "locationdesc", "data_value",
+             "data_value_footnote_symbol", "data_value_footnote"]
+        ].head(10).to_string(index=False)
+    )
+
+# Check whether IQR outliers have CDC footnotes
+
+for group in ["50-64 years", "65 years or older"]:
+    values = scd.loc[
+        scd["stratification1"] == group, "data_value"
+    ].dropna()
+
+    Q1 = values.quantile(0.25)
+    Q3 = values.quantile(0.75)
+    IQR = Q3 - Q1
+
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    outlier_data = scd[
+        (scd["stratification1"] == group) &
+        (scd["data_value"].notna()) &
+        ((scd["data_value"] < lower_bound) |
+         (scd["data_value"] > upper_bound))
+    ]
+
+    footnoted = outlier_data[
+        outlier_data["data_value_footnote"].notna()
+    ]
+
+    print("\n", group)
+    print("Total outliers:", len(outlier_data))
+    print("Outliers with footnotes:", len(footnoted))
+    print("Outliers without footnotes:", len(outlier_data) - len(footnoted))
+
+# Calculate the changes caused by removing IQR outliers
+
+for group in ["50-64 years", "65 years or older"]:
+    values = scd.loc[
+        scd["stratification1"] == group, "data_value"
+    ].dropna()
+
+    Q1 = values.quantile(0.25)
+    Q3 = values.quantile(0.75)
+    IQR = Q3 - Q1
+
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    no_outliers = values[
+        (values >= lower_bound) & (values <= upper_bound)
+    ]
+
+    mean_change = values.mean() - no_outliers.mean()
+    median_change = values.median() - no_outliers.median()
+
+    print("\n", group)
+    print("Mean change:", mean_change)
+    print("Median change:", median_change)
+
+print(df.columns.tolist())
+print(df['stratificationcategory1'].unique())
+print(df['stratification1'].unique())
+
+# ==========================================
+# COMPARE OUTLIERS ACROSS DIFFERENT FEATURES
+# ==========================================
+
+features = [
+    "Subjective cognitive decline or memory loss among older adults",
+    "Current smoking",
+    "Lifetime diagnosis of depression"
+]
+
+feature_df = df[
+    (df["topic"].isin(features)) &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"])) &
+    (df["data_value"].notna())
+].copy()
+
+
+# Create the outlier column directly
+feature_df["outlier"] = False
+
+for feature in features:
+
+    for age_group in ["50-64 years", "65 years or older"]:
+
+        mask = (
+            (feature_df["topic"] == feature) &
+            (feature_df["stratification1"] == age_group)
+        )
+
+        values = feature_df.loc[mask, "data_value"]
+
+        Q1 = values.quantile(0.25)
+        Q3 = values.quantile(0.75)
+        IQR = Q3 - Q1
+
+        lower = Q1 - 1.5 * IQR
+        upper = Q3 + 1.5 * IQR
+
+        feature_df.loc[mask, "outlier"] = (
+            (feature_df.loc[mask, "data_value"] < lower) |
+            (feature_df.loc[mask, "data_value"] > upper)
+        )
+
+
+# ==========================================
+# OUTLIER SUMMARY
+# ==========================================
+
+print("\n==========================================")
+print("OUTLIERS BY FEATURE")
+print("==========================================")
+
+outlier_summary = (
+    feature_df
+    .groupby(["topic", "stratification1"])["outlier"]
+    .agg(
+        Observations="count",
+        Outliers="sum"
+    )
+)
+
+outlier_summary["Outlier %"] = (
+    outlier_summary["Outliers"] /
+    outlier_summary["Observations"] * 100
+)
+
+print(outlier_summary.round(2))
+
+
+# ==========================================
+# SHOW ACTUAL OUTLIERS
+# ==========================================
+
+print("\n==========================================")
+print("OUTLIER OBSERVATIONS")
+print("==========================================")
+
+outliers = feature_df[feature_df["outlier"]].copy()
+
+print(
+    outliers[
+        [
+            "topic",
+            "yearstart",
+            "locationdesc",
+            "stratification1",
+            "stratificationcategory2",
+            "stratification2",
+            "data_value"
+        ]
+    ]
+    .sort_values(
+        ["topic", "stratification1", "data_value"],
+        ascending=[True, True, False]
+    )
+    .to_string(index=False)
+)
+
+# ==========================================
+# CHECK WHETHER OUTLIERS OCCUR IN THE SAME SAMPLES
+# ==========================================
+
+features = [
+    "Subjective cognitive decline or memory loss among older adults",
+    "Current smoking",
+    "Lifetime diagnosis of depression"
+]
+
+ages = ["50-64 years", "65 years or older"]
+
+# Keep only overall demographic estimates
+overall_df = df[
+    (df["topic"].isin(features)) &
+    (df["stratification1"].isin(ages)) &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+].copy()
+
+# Create an identifier for each underlying sample
+overall_df["sample_key"] = (
+    overall_df["yearstart"].astype(str) + "|" +
+    overall_df["locationid"].astype(str) + "|" +
+    overall_df["stratification1"]
+)
+
+# Identify outliers separately for each feature and age group
+overall_df["outlier"] = False
+
+for feature in features:
+    for age in ages:
+
+        mask = (
+            (overall_df["topic"] == feature) &
+            (overall_df["stratification1"] == age)
+        )
+
+        values = overall_df.loc[mask, "data_value"]
+
+        Q1 = values.quantile(0.25)
+        Q3 = values.quantile(0.75)
+        IQR = Q3 - Q1
+
+        lower = Q1 - 1.5 * IQR
+        upper = Q3 + 1.5 * IQR
+
+        overall_df.loc[mask, "outlier"] = (
+            (overall_df.loc[mask, "data_value"] < lower) |
+            (overall_df.loc[mask, "data_value"] > upper)
+        )
+
+# Create table showing which features are outliers
+overlap = overall_df.pivot_table(
+    index=["sample_key", "yearstart", "locationdesc", "stratification1"],
+    columns="topic",
+    values="outlier",
+    aggfunc="first",
+    fill_value=False
+)
+
+# Count how many features are outliers in each sample
+overlap["Number of outlier features"] = overlap.sum(axis=1)
+
+print("\n==========================================")
+print("OUTLIER OVERLAP")
+print("==========================================")
+
+print(
+    overlap["Number of outlier features"]
+    .value_counts()
+    .sort_index()
+)
+
+print("\nSamples that are outliers in 2+ features:")
+
+multiple_outliers = overlap[
+    overlap["Number of outlier features"] >= 2
+]
+
+print(multiple_outliers.to_string())
+
+import scipy.stats as stats
+
+feature = "Obesity"
+ages = ["50-64 years", "65 years or older"]
+
+obesity_df = df[
+    (df["topic"] == feature) &
+    (df["stratification1"].isin(ages)) &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+].copy()
+
+print("OBESITY DESCRIPTIVE STATISTICS")
+print("=" * 40)
+
+for age in ages:
+    values = obesity_df.loc[
+        obesity_df["stratification1"] == age, "data_value"
+    ]
+
+    Q1 = values.quantile(0.25)
+    Q3 = values.quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+
+    outliers = values[(values < lower) | (values > upper)]
+
+    print(f"\n{age}")
+    print(f"N: {len(values)}")
+    print(f"Mean: {values.mean():.3f}")
+    print(f"Median: {values.median():.3f}")
+    print(f"SD: {values.std():.3f}")
+    print(f"Q1: {Q1:.3f}")
+    print(f"Q3: {Q3:.3f}")
+    print(f"IQR: {IQR:.3f}")
+    print(f"Lower bound: {lower:.3f}")
+    print(f"Upper bound: {upper:.3f}")
+    print(f"Outliers: {len(outliers)}")
+    print(f"Outlier %: {len(outliers) / len(values) * 100:.2f}%")
+
+# ========================================
+# OBESITY HYPOTHESIS TEST
+# ========================================
+
+group_50_64 = obesity_df.loc[
+    obesity_df["stratification1"] == "50-64 years",
+    "data_value"
+]
+
+group_65_plus = obesity_df.loc[
+    obesity_df["stratification1"] == "65 years or older",
+    "data_value"
+]
+
+t_stat, p_value = stats.ttest_ind(
+    group_50_64,
+    group_65_plus,
+    equal_var=False
+)
+
+print("\nOBESITY HYPOTHESIS TEST")
+print("=" * 40)
+print(f"t-statistic: {t_stat:.4f}")
+print(f"p-value: {p_value:.10f}")
+
+if p_value < 0.05:
+    print("Result: Reject the null hypothesis")
+    print("There is a statistically significant difference.")
+else:
+    print("Result: Fail to reject the null hypothesis")
+    print("There is not a statistically significant difference.")
+
+# ========================================
+# OBESITY TEST AFTER REMOVING OUTLIERS
+# ========================================
+
+clean_obesity = obesity_df.copy()
+clean_obesity["outlier"] = False
+
+for age in ages:
+    mask = clean_obesity["stratification1"] == age
+    values = clean_obesity.loc[mask, "data_value"]
+
+    Q1 = values.quantile(0.25)
+    Q3 = values.quantile(0.75)
+    IQR = Q3 - Q1
+
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+
+    clean_obesity.loc[mask, "outlier"] = (
+        (clean_obesity.loc[mask, "data_value"] < lower) |
+        (clean_obesity.loc[mask, "data_value"] > upper)
+    )
+
+clean_obesity_no_outliers = clean_obesity[
+    ~clean_obesity["outlier"]
+].copy()
+
+group_50_64_clean = clean_obesity_no_outliers.loc[
+    clean_obesity_no_outliers["stratification1"] == "50-64 years",
+    "data_value"
+]
+
+group_65_plus_clean = clean_obesity_no_outliers.loc[
+    clean_obesity_no_outliers["stratification1"] == "65 years or older",
+    "data_value"
+]
+
+t_stat_clean, p_value_clean = stats.ttest_ind(
+    group_50_64_clean,
+    group_65_plus_clean,
+    equal_var=False
+)
+
+print("\nOBESITY AFTER REMOVING OUTLIERS")
+print("=" * 40)
+
+print(f"50-64 N: {len(group_50_64_clean)}")
+print(f"50-64 Mean: {group_50_64_clean.mean():.3f}")
+print(f"50-64 Median: {group_50_64_clean.median():.3f}")
+
+print(f"\n65+ N: {len(group_65_plus_clean)}")
+print(f"65+ Mean: {group_65_plus_clean.mean():.3f}")
+print(f"65+ Median: {group_65_plus_clean.median():.3f}")
+
+print(f"\nMean difference: {group_50_64_clean.mean() - group_65_plus_clean.mean():.3f}")
+print(f"t-statistic: {t_stat_clean:.4f}")
+print(f"p-value: {p_value_clean:.10f}")
+
+if p_value_clean < 0.05:
+    print("Result: Reject the null hypothesis")
+else:
+    print("Result: Fail to reject the null hypothesis")
+
+# ========================================
+# CURRENT SMOKING ANALYSIS
+# ========================================
+
+feature = "Current smoking"
+ages = ["50-64 years", "65 years or older"]
+
+smoking_df = df[
+    (df["topic"] == feature) &
+    (df["stratification1"].isin(ages)) &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+].copy()
+
+print("\nCURRENT SMOKING DESCRIPTIVE STATISTICS")
+print("=" * 40)
+
+for age in ages:
+    values = smoking_df.loc[
+        smoking_df["stratification1"] == age,
+        "data_value"
+    ]
+
+    Q1 = values.quantile(0.25)
+    Q3 = values.quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+
+    outliers = values[(values < lower) | (values > upper)]
+
+    print(f"\n{age}")
+    print(f"N: {len(values)}")
+    print(f"Mean: {values.mean():.3f}")
+    print(f"Median: {values.median():.3f}")
+    print(f"SD: {values.std():.3f}")
+    print(f"Q1: {Q1:.3f}")
+    print(f"Q3: {Q3:.3f}")
+    print(f"IQR: {IQR:.3f}")
+    print(f"Lower bound: {lower:.3f}")
+    print(f"Upper bound: {upper:.3f}")
+    print(f"Outliers: {len(outliers)}")
+    print(f"Outlier %: {len(outliers) / len(values) * 100:.2f}%")
+
+# ========================================
+# CURRENT SMOKING HYPOTHESIS TEST
+# ========================================
+
+group_50_64 = smoking_df.loc[
+    smoking_df["stratification1"] == "50-64 years",
+    "data_value"
+]
+
+group_65_plus = smoking_df.loc[
+    smoking_df["stratification1"] == "65 years or older",
+    "data_value"
+]
+
+t_stat, p_value = stats.ttest_ind(
+    group_50_64,
+    group_65_plus,
+    equal_var=False
+)
+
+print("\nCURRENT SMOKING HYPOTHESIS TEST")
+print("=" * 40)
+print(f"t-statistic: {t_stat:.4f}")
+print(f"p-value: {p_value:.10f}")
+
+if p_value < 0.05:
+    print("Result: Reject the null hypothesis")
+    print("There is a statistically significant difference.")
+else:
+    print("Result: Fail to reject the null hypothesis")
+    print("There is not a statistically significant difference.")
+
+# ========================================
+# CURRENT SMOKING TEST AFTER REMOVING OUTLIERS
+# ========================================
+
+clean_smoking = smoking_df.copy()
+clean_smoking["outlier"] = False
+
+for age in ages:
+    mask = clean_smoking["stratification1"] == age
+    values = clean_smoking.loc[mask, "data_value"]
+
+    Q1 = values.quantile(0.25)
+    Q3 = values.quantile(0.75)
+    IQR = Q3 - Q1
+
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+
+    clean_smoking.loc[mask, "outlier"] = (
+        (clean_smoking.loc[mask, "data_value"] < lower) |
+        (clean_smoking.loc[mask, "data_value"] > upper)
+    )
+
+clean_smoking_no_outliers = clean_smoking[
+    ~clean_smoking["outlier"]
+].copy()
+
+group_50_64_clean = clean_smoking_no_outliers.loc[
+    clean_smoking_no_outliers["stratification1"] == "50-64 years",
+    "data_value"
+]
+
+group_65_plus_clean = clean_smoking_no_outliers.loc[
+    clean_smoking_no_outliers["stratification1"] == "65 years or older",
+    "data_value"
+]
+
+t_stat_clean, p_value_clean = stats.ttest_ind(
+    group_50_64_clean,
+    group_65_plus_clean,
+    equal_var=False
+)
+
+print("\nCURRENT SMOKING AFTER REMOVING OUTLIERS")
+print("=" * 40)
+
+print(f"50-64 N: {len(group_50_64_clean)}")
+print(f"50-64 Mean: {group_50_64_clean.mean():.3f}")
+print(f"50-64 Median: {group_50_64_clean.median():.3f}")
+
+print(f"\n65+ N: {len(group_65_plus_clean)}")
+print(f"65+ Mean: {group_65_plus_clean.mean():.3f}")
+print(f"65+ Median: {group_65_plus_clean.median():.3f}")
+
+print(f"\nMean difference: {group_50_64_clean.mean() - group_65_plus_clean.mean():.3f}")
+print(f"t-statistic: {t_stat_clean:.4f}")
+print(f"p-value: {p_value_clean:.10f}")
+
+if p_value_clean < 0.05:
+    print("Result: Reject the null hypothesis")
+else:
+    print("Result: Fail to reject the null hypothesis")
+
+# ========================================
+# CURRENT SMOKING BY YEAR
+# ========================================
+
+smoking_yearly = smoking_df.groupby(
+    ["yearstart", "stratification1"]
+)["data_value"].mean().reset_index()
+
+print("\nCURRENT SMOKING BY YEAR")
+print("=" * 40)
+
+print(
+    smoking_yearly.pivot(
+        index="yearstart",
+        columns="stratification1",
+        values="data_value"
+    ).round(3)
+)
+
+# ========================================
+# CURRENT SMOKING TIME TREND
+# ========================================
+
+from scipy.stats import linregress
+
+print("\nCURRENT SMOKING TIME TREND")
+print("=" * 40)
+
+for age in ages:
+    age_data = smoking_yearly[
+        smoking_yearly["stratification1"] == age
+    ]
+
+    result = linregress(
+        age_data["yearstart"],
+        age_data["data_value"]
+    )
+
+    print(f"\n{age}")
+    print(f"Slope: {result.slope:.4f}")
+    print(f"R-squared: {result.rvalue ** 2:.4f}")
+    print(f"p-value: {result.pvalue:.10f}")
+
+    if result.pvalue < 0.05:
+        print("Result: Statistically significant time trend")
+    else:
+        print("Result: No statistically significant time trend")
+
+# ========================================
+# CURRENT SMOKING: AGE GROUP × YEAR
+# INTERACTION ANALYSIS
+# ========================================
+
+import statsmodels.formula.api as smf
+
+# Create a copy
+interaction_df = smoking_yearly.copy()
+
+# Create binary age-group variable
+interaction_df["age_group"] = (
+    interaction_df["stratification1"]
+    .map({
+        "50-64 years": 0,
+        "65 years or older": 1
+    })
+)
+
+# Center year around 2015
+interaction_df["year_centered"] = (
+    interaction_df["yearstart"] - 2015
+)
+
+# Regression with interaction
+model = smf.ols(
+    "data_value ~ year_centered * age_group",
+    data=interaction_df
+).fit()
+
+print("\nCURRENT SMOKING AGE × YEAR INTERACTION")
+print("=" * 50)
+
+print(model.summary())
+
+print("\nInteraction term:")
+print(f"Coefficient: {model.params['year_centered:age_group']:.4f}")
+print(f"P-value: {model.pvalues['year_centered:age_group']:.10f}")
+
+if model.pvalues["year_centered:age_group"] < 0.05:
+    print("Result: The time trend differs significantly between age groups.")
+else:
+    print("Result: No statistically significant difference in time trends between age groups.")
