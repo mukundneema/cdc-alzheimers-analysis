@@ -1238,3 +1238,505 @@ if model.pvalues["year_centered:age_group"] < 0.05:
     print("Result: The time trend differs significantly between age groups.")
 else:
     print("Result: No statistically significant difference in time trends between age groups.")
+
+# ========================================
+# DEPRESSION vs SCD
+# ========================================
+
+depression = df[
+    (df["topic"] == "Lifetime diagnosis of depression") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"])) &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+].copy()
+
+scd = df[
+    (df["topic"] == "Subjective cognitive decline or memory loss among older adults") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"])) &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+].copy()
+
+# Rename values
+depression = depression.rename(columns={"data_value": "depression"})
+scd = scd.rename(columns={"data_value": "scd"})
+
+# Match the same year, location, and age group
+merged = depression.merge(
+    scd,
+    on=["yearstart", "locationid", "stratification1"],
+    how="inner"
+)
+
+print("Matched observations:", len(merged))
+
+# ========================================
+# CORRELATIONS
+# ========================================
+
+from scipy.stats import pearsonr, spearmanr
+
+print("\nOVERALL")
+print("=" * 40)
+
+pearson_r, pearson_p = pearsonr(
+    merged["depression"],
+    merged["scd"]
+)
+
+spearman_r, spearman_p = spearmanr(
+    merged["depression"],
+    merged["scd"]
+)
+
+print("Pearson r:", pearson_r)
+print("Pearson p:", pearson_p)
+
+print("Spearman rho:", spearman_r)
+print("Spearman p:", spearman_p)
+
+# ========================================
+# BY AGE GROUP
+# ========================================
+
+for age in ["50-64 years", "65 years or older"]:
+
+    subset = merged[
+        merged["stratification1"] == age
+    ]
+
+    r, p = pearsonr(
+        subset["depression"],
+        subset["scd"]
+    )
+
+    rho, sp = spearmanr(
+        subset["depression"],
+        subset["scd"]
+    )
+
+    print("\n", age)
+    print("-" * 40)
+    print("N:", len(subset))
+    print("Pearson r:", r)
+    print("Pearson p:", p)
+    print("Spearman rho:", rho)
+    print("Spearman p:", sp)
+
+from scipy.stats import pearsonr
+import numpy as np
+
+group_50 = merged[merged["stratification1"] == "50-64 years"]
+group_65 = merged[merged["stratification1"] == "65 years or older"]
+
+r1, _ = pearsonr(group_50["depression"], group_50["scd"])
+r2, _ = pearsonr(group_65["depression"], group_65["scd"])
+
+n1 = len(group_50)
+n2 = len(group_65)
+
+# Fisher z transformation
+z1 = np.arctanh(r1)
+z2 = np.arctanh(r2)
+
+se = np.sqrt(
+    1/(n1 - 3) +
+    1/(n2 - 3)
+)
+
+z_difference = (z1 - z2) / se
+
+from scipy.stats import norm
+
+p_value = 2 * (1 - norm.cdf(abs(z_difference)))
+
+print("FISHER'S Z TEST")
+print("=" * 40)
+print("50-64 correlation:", r1)
+print("65+ correlation:", r2)
+print("Z statistic:", z_difference)
+print("P-value:", p_value)
+
+import statsmodels.formula.api as smf
+
+# Create age indicator
+merged["age_group"] = (
+    merged["stratification1"] == "65 years or older"
+).astype(int)
+
+# Depression × age interaction
+model = smf.ols(
+    "scd ~ depression * age_group",
+    data=merged
+).fit()
+
+print(model.summary())
+
+# ========================================
+# DEPRESSION vs SCD: OUTLIER SENSITIVITY
+# ========================================
+
+from scipy.stats import pearsonr, spearmanr
+
+print("\nOUTLIER SENSITIVITY ANALYSIS")
+print("=" * 50)
+
+for age in ["50-64 years", "65 years or older"]:
+
+    subset = merged[
+        merged["stratification1"] == age
+    ].copy()
+
+    # IQR for depression
+    q1_dep = subset["depression"].quantile(0.25)
+    q3_dep = subset["depression"].quantile(0.75)
+    iqr_dep = q3_dep - q1_dep
+
+    dep_lower = q1_dep - 1.5 * iqr_dep
+    dep_upper = q3_dep + 1.5 * iqr_dep
+
+    # IQR for SCD
+    q1_scd = subset["scd"].quantile(0.25)
+    q3_scd = subset["scd"].quantile(0.75)
+    iqr_scd = q3_scd - q1_scd
+
+    scd_lower = q1_scd - 1.5 * iqr_scd
+    scd_upper = q3_scd + 1.5 * iqr_scd
+
+    # Keep observations that aren't IQR outliers
+    clean = subset[
+        (subset["depression"] >= dep_lower) &
+        (subset["depression"] <= dep_upper) &
+        (subset["scd"] >= scd_lower) &
+        (subset["scd"] <= scd_upper)
+    ].copy()
+
+    # Correlations before and after
+    r_before, p_before = pearsonr(
+        subset["depression"],
+        subset["scd"]
+    )
+
+    r_after, p_after = pearsonr(
+        clean["depression"],
+        clean["scd"]
+    )
+
+    rho_before, sp_before = spearmanr(
+        subset["depression"],
+        subset["scd"]
+    )
+
+    rho_after, sp_after = spearmanr(
+        clean["depression"],
+        clean["scd"]
+    )
+
+    print(f"\n{age}")
+    print("-" * 40)
+
+    print("Original N:", len(subset))
+    print("After removing IQR outliers:", len(clean))
+    print("Outliers removed:", len(subset) - len(clean))
+
+    print("\nPearson:")
+    print("Before:", r_before, "p =", p_before)
+    print("After: ", r_after, "p =", p_after)
+
+    print("\nSpearman:")
+    print("Before:", rho_before, "p =", sp_before)
+    print("After: ", rho_after, "p =", sp_after)
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df = pd.read_csv("/Users/mukundneema/Monte Carlo/cdc_alzheimers_data.csv")
+
+depression = df[
+    (df["topic"] == "Lifetime diagnosis of depression") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"])) &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+].copy()
+
+age_50_64 = depression[
+    depression["stratification1"] == "50-64 years"
+]["data_value"]
+
+age_65_plus = depression[
+    depression["stratification1"] == "65 years or older"
+]["data_value"]
+
+plt.figure(figsize=(8, 6))
+
+plt.boxplot(
+    [age_50_64, age_65_plus],
+    tick_labels=["50–64 years", "65+ years"],
+    showfliers=True
+)
+
+plt.title("Lifetime Diagnosis of Depression by Age Group", fontsize=14)
+plt.xlabel("Age Group", fontsize=12)
+plt.ylabel("Reported Prevalence (%)", fontsize=12)
+
+plt.grid(axis="y", linestyle="--", alpha=0.3)
+
+plt.tight_layout()
+plt.savefig(
+    "/Users/mukundneema/Monte Carlo/depression_boxplot.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+plt.show()
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.stats import pearsonr, linregress
+
+# Load CDC dataset
+df = pd.read_csv("/Users/mukundneema/Monte Carlo/cdc_alzheimers_data.csv")
+
+# Topics
+depression_topic = "Lifetime diagnosis of depression"
+scd_topic = "Subjective cognitive decline or memory loss among older adults"
+
+# Filter depression data
+depression = df[
+    (df["topic"] == depression_topic) &
+    (df["stratification1"] == "50-64 years") &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+][["yearstart", "locationid", "stratification1", "data_value"]].copy()
+
+# Filter SCD data
+scd = df[
+    (df["topic"] == scd_topic) &
+    (df["stratification1"] == "50-64 years") &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+][["yearstart", "locationid", "stratification1", "data_value"]].copy()
+
+# Rename values
+depression = depression.rename(columns={"data_value": "depression"})
+scd = scd.rename(columns={"data_value": "scd"})
+
+# Match depression and SCD by year + location + age group
+matched = pd.merge(
+    depression,
+    scd,
+    on=["yearstart", "locationid", "stratification1"],
+    how="inner"
+)
+
+# Calculate Pearson correlation
+r, p = pearsonr(matched["depression"], matched["scd"])
+
+# Calculate regression line
+slope, intercept, _, _, _ = linregress(
+    matched["depression"],
+    matched["scd"]
+)
+
+# Create scatterplot
+plt.figure(figsize=(8, 6))
+
+plt.scatter(
+    matched["depression"],
+    matched["scd"],
+    alpha=0.65
+)
+
+# Regression line
+x_line = pd.Series([
+    matched["depression"].min(),
+    matched["depression"].max()
+])
+
+y_line = intercept + slope * x_line
+
+plt.plot(
+    x_line,
+    y_line,
+    linewidth=2
+)
+
+# Labels
+plt.title(
+    "Depression Prevalence vs. SCD Prevalence: Adults Aged 50–64",
+    fontsize=14
+)
+
+plt.xlabel(
+    "Reported Lifetime Depression Prevalence (%)",
+    fontsize=12
+)
+
+plt.ylabel(
+    "Reported SCD Prevalence (%)",
+    fontsize=12
+)
+
+# Add correlation and sample size
+plt.text(
+    0.05,
+    0.95,
+    f"Pearson r = {r:.3f}\nn = {len(matched)}",
+    transform=plt.gca().transAxes,
+    verticalalignment="top",
+    fontsize=11
+)
+
+plt.grid(
+    axis="both",
+    linestyle="--",
+    alpha=0.3
+)
+
+plt.tight_layout()
+
+# Save
+plt.savefig(
+    "/Users/mukundneema/Monte Carlo/depression_scd_50_64.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
+
+# Print results
+print("Number of matched observations:", len(matched))
+print("Pearson r:", r)
+print("Pearson p-value:", p)
+print("Regression slope:", slope)
+print("Regression intercept:", intercept)
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.stats import pearsonr, linregress
+
+# Load CDC dataset
+df = pd.read_csv("/Users/mukundneema/Monte Carlo/cdc_alzheimers_data.csv")
+
+# Topics
+depression_topic = "Lifetime diagnosis of depression"
+scd_topic = "Subjective cognitive decline or memory loss among older adults"
+
+# Filter depression data for 65+
+depression = df[
+    (df["topic"] == depression_topic) &
+    (df["stratification1"] == "65 years or older") &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+][["yearstart", "locationid", "stratification1", "data_value"]].copy()
+
+# Filter SCD data for 65+
+scd = df[
+    (df["topic"] == scd_topic) &
+    (df["stratification1"] == "65 years or older") &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+][["yearstart", "locationid", "stratification1", "data_value"]].copy()
+
+# Rename variables
+depression = depression.rename(columns={"data_value": "depression"})
+scd = scd.rename(columns={"data_value": "scd"})
+
+# Match depression and SCD by year, location, and age group
+matched = pd.merge(
+    depression,
+    scd,
+    on=["yearstart", "locationid", "stratification1"],
+    how="inner"
+)
+
+# Pearson correlation
+r, p = pearsonr(
+    matched["depression"],
+    matched["scd"]
+)
+
+# Regression line
+slope, intercept, _, _, _ = linregress(
+    matched["depression"],
+    matched["scd"]
+)
+
+# Create graph
+plt.figure(figsize=(8, 6))
+
+plt.scatter(
+    matched["depression"],
+    matched["scd"],
+    alpha=0.65
+)
+
+# Regression line
+x_line = pd.Series([
+    matched["depression"].min(),
+    matched["depression"].max()
+])
+
+y_line = intercept + slope * x_line
+
+plt.plot(
+    x_line,
+    y_line,
+    linewidth=2
+)
+
+# Title and axes
+plt.title(
+    "Depression Prevalence vs. SCD Prevalence: Adults Aged 65+",
+    fontsize=14
+)
+
+plt.xlabel(
+    "Reported Lifetime Depression Prevalence (%)",
+    fontsize=12
+)
+
+plt.ylabel(
+    "Reported SCD Prevalence (%)",
+    fontsize=12
+)
+
+# Display correlation and sample size
+plt.text(
+    0.05,
+    0.95,
+    f"Pearson r = {r:.3f}\nn = {len(matched)}",
+    transform=plt.gca().transAxes,
+    verticalalignment="top",
+    fontsize=11
+)
+
+plt.grid(
+    axis="both",
+    linestyle="--",
+    alpha=0.3
+)
+
+plt.tight_layout()
+
+# Save graph
+plt.savefig(
+    "/Users/mukundneema/Monte Carlo/depression_scd_65_plus.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
+
+# Print results
+print("Number of matched observations:", len(matched))
+print("Pearson r:", r)
+print("Pearson p-value:", p)
+print("Regression slope:", slope)
+print("Regression intercept:", intercept)
