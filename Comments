@@ -1,0 +1,9 @@
+09/27/2026.
+
+Comments to Mukund:
+
+I saw you are reading the data from CDC web every time you run the code. I suggest you run the data and save a clean and processed version (e.g. csv file) to this repository. 
+Then you can read the data from your own repository when you need.
+
+Best,
+Zheming
