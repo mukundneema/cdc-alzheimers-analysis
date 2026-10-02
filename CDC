@@ -1615,6 +1615,7 @@ print("Pearson p-value:", p)
 print("Regression slope:", slope)
 print("Regression intercept:", intercept)
 
+'''
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr, linregress
@@ -1740,3 +1741,171 @@ print("Pearson r:", r)
 print("Pearson p-value:", p)
 print("Regression slope:", slope)
 print("Regression intercept:", intercept)
+'''
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import linregress, probplot
+
+# Load data
+df = pd.read_csv("/Users/mukundneema/Monte Carlo/cdc_alzheimers_data.csv")
+
+# -----------------------------
+# Depression
+# -----------------------------
+depression = df[
+    (df["topic"] == "Lifetime diagnosis of depression") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"])) &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+].copy()
+
+depression = depression[
+    ["yearstart", "locationid", "stratification1", "data_value"]
+].rename(columns={"data_value": "depression"})
+
+
+# -----------------------------
+# SCD
+# -----------------------------
+scd = df[
+    (df["topic"] == "Subjective cognitive decline or memory loss among older adults") &
+    (df["stratification1"].isin(["50-64 years", "65 years or older"])) &
+    (df["stratificationcategory2"].isna()) &
+    (df["stratification2"].isna()) &
+    (df["data_value"].notna())
+].copy()
+
+scd = scd[
+    ["yearstart", "locationid", "stratification1", "data_value"]
+].rename(columns={"data_value": "scd"})
+
+
+# -----------------------------
+# Match depression and SCD
+# -----------------------------
+merged = pd.merge(
+    depression,
+    scd,
+    on=["yearstart", "locationid", "stratification1"],
+    how="inner"
+)
+
+print("Matched observations:")
+print(merged["stratification1"].value_counts())
+
+
+# -----------------------------
+# Calculate regressions
+# -----------------------------
+results = {}
+
+for age in ["50-64 years", "65 years or older"]:
+
+    data = merged[
+        merged["stratification1"] == age
+    ].copy()
+
+    x = data["depression"].to_numpy()
+    y = data["scd"].to_numpy()
+
+    regression = linregress(x, y)
+
+    fitted = regression.intercept + regression.slope * x
+    residuals = y - fitted
+
+    results[age] = {
+        "x": x,
+        "y": y,
+        "fitted": fitted,
+        "residuals": residuals,
+        "regression": regression
+    }
+
+    print("\n", age)
+    print("N:", len(x))
+    print("Slope:", regression.slope)
+    print("Intercept:", regression.intercept)
+    print("R:", regression.rvalue)
+    print("p:", regression.pvalue)
+
+
+# ============================================================
+# FIGURE 4: RESIDUALS VS FITTED
+# ============================================================
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+for ax, age in zip(
+    axes,
+    ["50-64 years", "65 years or older"]
+):
+
+    fitted = results[age]["fitted"]
+    residuals = results[age]["residuals"]
+
+    ax.scatter(fitted, residuals, alpha=0.7)
+
+    # Zero residual reference line
+    ax.axhline(0, linestyle="--")
+
+    ax.set_xlabel("Fitted SCD")
+    ax.set_ylabel("Residual")
+
+    if age == "50-64 years":
+        ax.set_title("50–64")
+    else:
+        ax.set_title("65+")
+
+fig.suptitle("Residuals vs. Fitted SCD")
+
+plt.tight_layout()
+
+plt.savefig(
+    "/Users/mukundneema/Monte Carlo/depression_scd_residuals.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
+
+
+# ============================================================
+# FIGURE 5: QQ PLOTS
+# ============================================================
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+for ax, age in zip(
+    axes,
+    ["50-64 years", "65 years or older"]
+):
+
+    residuals = results[age]["residuals"]
+
+    probplot(
+        residuals,
+        dist="norm",
+        plot=ax
+    )
+
+    if age == "50-64 years":
+        ax.set_title("50–64")
+    else:
+        ax.set_title("65+")
+
+    ax.set_xlabel("Theoretical Quantiles")
+    ax.set_ylabel("Ordered Residuals")
+
+fig.suptitle("QQ Plots of Regression Residuals")
+
+plt.tight_layout()
+
+plt.savefig(
+    "/Users/mukundneema/Monte Carlo/depression_scd_qqplots.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
